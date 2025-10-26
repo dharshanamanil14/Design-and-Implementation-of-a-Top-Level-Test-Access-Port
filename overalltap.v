@@ -505,8 +505,8 @@ module UART_tx(
           shift_reg = shift_reg>>1; shift_reg[9] = serial_in; counter<=counter+4'b0001; Busy<=1'b0;Load=1'b0;
           if(counter==4'b1001) present_state<=LOAD; end
     LOAD: begin
-          /*parallel_out<=8'b11111111;*/
-          parallel_out<=shift_reg[8:1];
+          parallel_out<=8'b11111111;
+          /*parallel_out<=shift_reg[8:1];*/
           present_state<=WAIT; Busy<=1'b1;Load=1'b1; end
     WAIT: begin
           shift_reg[9:0]<=10'b0000000000; Busy<=1'b0; counter<=4'b0001;present_state<=IDLE;Load=1'b0;
@@ -581,11 +581,11 @@ module test_access_port (
     input wire trst_b,
     input wire tdi,
     input tdo_bist_tdr,
-    input tdo_rtdr,
+    input wire [14:1] tdo_rtdr,
     output wire tdo,
     output wire [3:0] current_state_out,
     output wire [3:0] current_state,
-    output dr_select_one_hot,
+    output wire [31:0] dr_select_one_hot,
     output wire capture_dr,
     output wire shift_dr,
     output wire update_dr
@@ -607,7 +607,6 @@ module test_access_port (
     );
 
     // --- Instruction Register ---
-    wire [31:0] dr_select_one_hot;
     wire tdo_ir;
     instruction_register U_IR (
         .tck(tck),
@@ -786,19 +785,51 @@ jtag_data_register U_ITDR15 (
 
      wire [15:1] tdo_itdr_ext;
 
-     wire tdo_bypass;
+    
      wire tdo_idcode;
      // These wires should be connected from top.v
-     // tdo_idcode, tdo_bist_tdr, tdo_itdr_ext, tdo_rtdr_ext, tdo_bypass
+     // tdo_idcode, tdo_bist_tdr, tdo_itdr_ext, tdo_rtdr_ext,
+// TDO multiplexer logic showing all data register selections
+assign tdo = shift_ir ? tdo_ir :  // If in Shift-IR, output from IR
+    (shift_dr ? (                 // If in Shift-DR, select based on instruction
+        // IDCODE Register
+        dr_select_one_hot[1] ? tdo_idcode :
+        
+        // BIST Data Register
+        dr_select_one_hot[2] ? tdo_bist_tdr :
+        
+        // Internal Test Data Registers (ITDRs)
+        dr_select_one_hot[3] ? tdo_itdr[1] :   // ITDR1
+        dr_select_one_hot[4] ? tdo_itdr[3] :   // ITDR3 (ITDR2 skipped)
+        dr_select_one_hot[5] ? tdo_itdr[4] :   // ITDR4
+        dr_select_one_hot[6] ? tdo_itdr[5] :   // ITDR5
+        dr_select_one_hot[7] ? tdo_itdr[6] :   // ITDR6
+        dr_select_one_hot[8] ? tdo_itdr[7] :   // ITDR7
+        dr_select_one_hot[9] ? tdo_itdr[8] :   // ITDR8
+        dr_select_one_hot[10] ? tdo_itdr[9] :  // ITDR9
+        dr_select_one_hot[11] ? tdo_itdr[10] : // ITDR10
+        dr_select_one_hot[12] ? tdo_itdr[11] : // ITDR11
+        dr_select_one_hot[13] ? tdo_itdr[12] : // ITDR12
+        dr_select_one_hot[14] ? tdo_itdr[13] : // ITDR13
+        dr_select_one_hot[15] ? tdo_itdr[14] : // ITDR14
+        dr_select_one_hot[16] ? tdo_itdr[15] : // ITDR15
 
-     assign tdo = shift_ir ? tdo_ir :
-                      (shift_dr ? (
-                          dr_select_one_hot[1]  ? tdo_idcode :
-                          dr_select_one_hot[2]  ? tdo_bist_tdr :
-                          |dr_select_one_hot[16:3] ? tdo_itdr:
-                          |dr_select_one_hot[30:17] ? tdo_rtdr:
-                          tdo_bypass
-                      ) : 1'bZ);
+        // Remote Test Data Registers (RTDRs)
+        dr_select_one_hot[17] ? tdo_rtdr[1] :  // RTDR1
+        dr_select_one_hot[18] ? tdo_rtdr[2] :  // RTDR2
+        dr_select_one_hot[19] ? tdo_rtdr[3] :  // RTDR3
+        dr_select_one_hot[20] ? tdo_rtdr[4] :  // RTDR4
+        dr_select_one_hot[21] ? tdo_rtdr[5] :  // RTDR5
+        dr_select_one_hot[22] ? tdo_rtdr[6] :  // RTDR6
+        dr_select_one_hot[23] ? tdo_rtdr[7] :  // RTDR7
+        dr_select_one_hot[24] ? tdo_rtdr[8] :  // RTDR8
+        dr_select_one_hot[25] ? tdo_rtdr[9] :  // RTDR9
+        dr_select_one_hot[26] ? tdo_rtdr[10] : // RTDR10
+        dr_select_one_hot[27] ? tdo_rtdr[11] : // RTDR11
+        dr_select_one_hot[28] ? tdo_rtdr[12] : // RTDR12
+        dr_select_one_hot[29] ? tdo_rtdr[13] : // RTDR13
+        dr_select_one_hot[30] ? tdo_rtdr[14] : 1'bZ// RTDR14
+    ) : 1'bZ);                    // High-impedance when not shifting
 endmodule
 
 
