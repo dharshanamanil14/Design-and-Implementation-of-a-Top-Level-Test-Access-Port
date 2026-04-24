@@ -1,436 +1,597 @@
 `timescale 1ns / 1ps
 
-module MBistController (
-    input clk,
-    input rst,
-    input test_mode,
-    input wr_en,
-    input rd_en,
-    input data_in,
-    input [3:0] wraddr,
-    input [3:0] rdaddr,
-    input [1:0] fault,
-    output reg bist_status
-);
+//(1)Transaction of only bit is allowed(i.e datain and dataout are of 1 bit each) 
+//   since march algorithm is primarily useful for cell testing.
+//(2)4x4 memory array created. A cell can be selected by giving both row address(RA)
+//   and column address(CA)
+//(3)fault opcode: 00=stuck-at, 01=transition, 10=inversion coupling, 11=normal
 
-    reg [3:0] state;
-    reg wr_en_test;
-    reg rd_en_test;
-    reg data_in_test;
-    reg [3:0] wraddr_test;
-    reg [3:0] rdaddr_test;
 
-    reg wr_en_mux;
-    reg rd_en_mux;
-    reg data_in_mux;
-    reg [3:0] wraddr_mux;
-    reg [3:0] rdaddr_mux;
+module memory#(parameter RAWIDTH = 2,  CAWIDTH = 2) //RAWIDTH=Row Adress Width and CAWIDTH=Column address width
+				(
+				// Clock and Reset
+				input clk,
+				input rst,
 
-    reg addr_rst;
-    wire data_out_mem;
+				//Column and Row address
+				input [RAWIDTH-1:0]RA,
+				input [CAWIDTH-1:0]CA,
 
-    always @(posedge clk) begin
-        if (rst) begin
-            wr_en_test <= 0;
-            rd_en_test <= 0;
-            data_in_mux <= 0;
-            wraddr_mux <= 4'b0000;
-            rdaddr_mux <= 4'b0000;
-        end else begin
-            wr_en_mux = test_mode ? wr_en_test : wr_en;
-            rd_en_mux = test_mode ? rd_en_test : rd_en;
-            data_in_mux = test_mode ? data_in_test : data_in;
-            wraddr_mux = test_mode ? wraddr_test : wraddr;
-            rdaddr_mux = test_mode ? rdaddr_test : rdaddr;
-        end
-    end
+				// Write Interface
+				input we,
+				input datain,
 
-    always @(posedge clk) begin
-        if (rst) begin
-            state <= 0;
-            wr_en_test <= 0;
-            rd_en_test <= 0;
-            wraddr_test <= 0;
-            bist_status <= 0;
-            data_in_test <= 0;
-            addr_rst <= 0;
-        end else begin
-            case (state)
-                0: begin
-                    if (test_mode) begin
-                        wr_en_test <= 1;
-                        rd_en_test <= 0;
-                        data_in_test <= 0;
-                        wraddr_test <= 0;
-                        rdaddr_test <= 0;
-                        state <= 1;
-                    end else begin
-                        state <= 0;
-                    end
-                end
-//{↕(w0); ↑(r0,w1,r1); ↓(r1,w0,r0); ↕(r0)} 
-//↑(w0)                ///////////////////////////////////////////////////////////////
-                1: begin // write0
-                    wr_en_test <= 1;
-                    rd_en_test <= 0;
-                    data_in_test <= 1'b0;
+				// Read Interface
+				input re,
+				output reg dataout  //one bit data coming out from one cell
+				);
+//create memory model
+localparam rDEPTH = 2**RAWIDTH;
+localparam cDEPTH = 2**CAWIDTH;
 
-                    if (wraddr_test == 15) begin
-                        state <= 2;
-                        addr_rst <= 0;
-                    end
-                    wraddr_test <= wraddr_test + 1'b1;
-                end
-// ↑(r0,w1,r1);
+reg [cDEPTH-1:0] memory [rDEPTH-1:0];
+
+integer i,j;
+
+always @(posedge clk)
+begin
+	if(rst)
+	begin
+		for(i=0; i < 2**RAWIDTH ;i=i+1)
+			begin
+			for(j=0; j < 2**CAWIDTH;j=j+1)
+				begin
+					memory[i][j] <= 0;
+				end
+			end
+	end
+	else
+		begin
+			if(we)
+				memory[RA][CA] <= datain;
+		end
+end
 
 
 
+always @ (posedge clk)
+begin
+	if(re)
+		dataout <= memory[RA][CA];
+end
 
-                2: begin // read0
-                    if (addr_rst == 0) begin
-                        rdaddr_test <= 0;
-                        wraddr_test <= 0;
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        addr_rst <= 1;
-                    end else begin
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        // rdaddr_test <= rdaddr_test + 1'b1;
-                        if (data_out_mem == 0) begin
-                            $display("No error");
-                            state <= 3;
-                            wr_en_test <= 1;
-                            rd_en_test <= 0;
-                            data_in_test <= 1;
-                        end else begin
-                            $display(" error");
-                            state <= 3;
-                            wr_en_test <= 1;
-                            rd_en_test <= 0;
-                            data_in_test <= 1;
-                            bist_status <= 1;
-                        end
-                        rdaddr_test <= rdaddr_test + 1'b1;
-                    end
-                end
+endmodule   
 
-                /////////////////////////////////////////////////////
-                3: begin // write 1
-                    wr_en_test <= 1;
-                    rd_en_test <= 0;
-                    data_in_test <= 1'b1;
+module memory_SA_marchy#(parameter RAWIDTH = 2,  CAWIDTH = 2)
+				(
+				input clk,
+				input rst,
+				input [RAWIDTH-1:0]RA,
+				input [CAWIDTH-1:0]CA,
+				input we,
+				input datain,
+				input re,
+				output reg dataout
+				);
 
-                    if (wraddr_test == 15) begin
-                        state <= 4;
-                        rd_en_test <= 1;
-                        wr_en_test <= 0;
-                        addr_rst <= 0;
-                    end else begin
-                        state <= 4;
-                        rd_en_test <= 1;
-                        wr_en_test <= 0;
-                    end
-                    wraddr_test <= wraddr_test + 1'b1;
-                end
-                /////////////////////////////////////////////////////
-                4: begin // read1
-                    if (addr_rst == 0) begin
-                        rdaddr_test <= 0;
-                        wraddr_test <= 0;
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        addr_rst <= 1;
-                    end else begin
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        // rdaddr_test <= rdaddr_test + 1'b1;
-                            if (rdaddr_test == 15) begin
-                                // rdaddr_test <= rdaddr_test + 1'b1;
-                                if (data_out_mem == 1) begin
-                                    $display("No error");
-                                    state <= 5;
-                                    wr_en_test <= 0;
-                                    rd_en_test <= 1;
-                                    //data_in_test <= 0;
-                                end else begin
-                                    $display(" error");
-                                    state <= 5;
-                                    wr_en_test <= 0;
-                                    rd_en_test <= 1;
-                                    //data_in_test <= 0;
-                                    bist_status <= 1;
-                                end end
-                            else begin
-                                if (data_out_mem == 1) begin
-                                    $display("No error");
-                                    state <= 2;
-                                    wr_en_test <= 0;
-                                    rd_en_test <= 1;
-                                    //data_in_test <= 0;
-                                end else begin
-                                    $display(" error");
-                                    state <= 2;
-                                    wr_en_test <= 0;
-                                    rd_en_test <= 1;
-                                    //data_in_test <= 0;
-                                    bist_status <= 1;
-                                end end
-                                
-                        rdaddr_test <= rdaddr_test + 1'b1;
-                    end
-                end
-//↓(r1,w0,r0); 
+localparam rDEPTH = 2**RAWIDTH;
+localparam cDEPTH = 2**CAWIDTH;
 
-                5: begin // read 1
-                    if (addr_rst == 0) begin
-                        rdaddr_test <= 4'b1111;
-                        wraddr_test <= 4'b1111;
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        addr_rst <= 1;
-                    end else begin
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        // rdaddr_test<=rdaddr_test+1'b1;
-                        if (data_out_mem == 1) begin
-                            $display("No error");
-                            state <= 6;
-                            wr_en_test <= 1;
-                            rd_en_test <= 0;
-                            data_in_test <= 0;
-                        end else begin
-                            $display(" error");
-                            state <= 6;
-                            wr_en_test <= 1;
-                            rd_en_test <= 0;
-                            data_in_test <= 0;
-                            bist_status <= 1;
-                        end
-                        rdaddr_test <= rdaddr_test - 1'b1;
-                    end
-                end
+reg [cDEPTH-1:0] memory [rDEPTH-1:0];
 
-                6: begin // write 0
-                    wr_en_test <= 1;
-                    rd_en_test <= 0;
-                    data_in_test <= 1'b0;
+integer i,j;
 
-                    if (wraddr_test == 0) begin
-                        state <= 7;
-                        rd_en_test <= 1;
-                        wr_en_test <= 0;
-                        addr_rst <= 0;
-                    end else begin
-                        state <= 7;
-                        rd_en_test <= 1;
-                        wr_en_test <= 0;
-                    end
-                    wraddr_test <= wraddr_test - 1'b1;
-                end
+always @(posedge clk)
+begin
+	if(rst)
+	begin
+		for(i=0; i < 2**RAWIDTH ;i=i+1)
+		begin
+			for(j=0; j < 2**CAWIDTH;j=j+1)
+			begin
+				memory[i][j] <= 0;
+			end
+		end
+	end
+	else
+	begin
+		if(we)
+			memory[RA][CA] <= datain;
+	end
 
-                7: begin // read 0
-                    if (addr_rst == 0) begin
-                        rdaddr_test <= 4'b1111;
-                        wraddr_test <= 4'b1111;
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        addr_rst <= 1;
-                    end else begin
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        // rdaddr_test<=rdaddr_test+1'b1;
-                            if (rdaddr_test == 0) begin
-                                if (data_out_mem == 0) begin
-                                    $display("No error");
-                                    state <= 8;
-                                    wr_en_test <= 0;
-                                    rd_en_test <= 1;
-                                    //data_in_test <= 0;
-                                end else begin
-                                    $display(" error");
-                                    state <= 8;
-                                    wr_en_test <= 0;
-                                    rd_en_test <= 1;
-                                    //data_in_test <= 0;
-                                    bist_status <= 1;
-                                end end
-                            else begin
-                                if (data_out_mem == 0) begin
-                                    $display("No error");
-                                    state <= 5;
-                                    wr_en_test <= 0;
-                                    rd_en_test <= 1;
-                                    //data_in_test <= 0;
-                                end else begin
-                                    $display(" error");
-                                    state <= 5;
-                                    wr_en_test <= 0;
-                                    rd_en_test <= 1;
-                                    //data_in_test <= 0;
-                                    bist_status <= 1;
-                                end end
-                        rdaddr_test <= rdaddr_test - 1'b1;
-                    end
-                end
-//↓(r0)
-               8: begin // read 0
-                    if (addr_rst == 0) begin
-                        rdaddr_test <= 4'b1111;
-                        wraddr_test <= 4'b1111;
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        addr_rst <= 1;
-                    end else begin
-                        wr_en_test <= 0;
-                        rd_en_test <= 1;
-                        // rdaddr_test<=rdaddr_test+1'b1;
-                        if (data_out_mem == 0) begin
-                            $display("No error");
-//                          state<=0;
-//                          wr_en_test<=1;
-//                          rd_en_test<=0;
-//                          data_in_test<=1;
-                        end else begin
-                            $display(" error");
-                            bist_status <= 1;
-//                          state<=3;
-//                          wr_en_test<=1;
-//                          rd_en_test<=0;
-//                          data_in_test<=1;
-                        end
-                        rdaddr_test <= rdaddr_test - 1'b1;
-                        if (rdaddr_test == 0) begin
-                            state <= 0;
-                        end
-                    end
-                end
-            endcase
-        end
-    end
+	memory[0][1] <= 1;
+	memory[0][0] <= 0;
+	memory[3][0] <= 1;
+end
 
-    ram #(
-        .AWIDTH(4)
-    ) ram_model_inst (
-        .clk(clk),
-        .reset(rst),
-        .we(wr_en_mux),
-        .wr_addr(wraddr_mux),
-        .data_in(data_in_mux),
-        .re(rd_en_mux),
-        .rd_addr(rdaddr_mux),
-        .data_out(data_out_mem),
-        .fault(fault)
-    );
+always @ (posedge clk)
+begin
+	if(re)
+		dataout <= memory[RA][CA];
+end
 
 endmodule
 
-module ram #(
-    parameter AWIDTH = 4
-) (
-    clk,
-    reset,
-    wr_addr,
-    rd_addr,
-    data_in,
-    data_out,
-    we,
-    re,
-    fault
+module memory_T_marchy#(parameter RAWIDTH = 2,  CAWIDTH = 2)
+				(
+				input clk,
+				input rst,
+				input [RAWIDTH-1:0]RA,
+				input [CAWIDTH-1:0]CA,
+				input we,
+				input datain,
+				input re,
+				output reg dataout
+				);
+
+localparam rDEPTH = 2**RAWIDTH;
+localparam cDEPTH = 2**CAWIDTH;
+
+reg [cDEPTH-1:0] memory [rDEPTH-1:0];
+
+integer i,j;
+
+always @(posedge clk)
+begin
+	if(rst)
+	begin
+		for(i=0; i < 2**RAWIDTH ;i=i+1)
+		begin
+			for(j=0; j < 2**CAWIDTH;j=j+1)
+			begin
+				memory[i][j] <= 0;
+			end
+		end
+	end
+	else
+	begin
+		if(we)
+			memory[RA][CA] <= datain;
+	end
+end
+
+always @(negedge memory[1][3])
+begin
+	memory[1][3] = ~memory[1][3];
+end
+
+always @ (posedge clk)
+begin
+	if(re)
+		dataout <= memory[RA][CA];
+end
+
+endmodule
+
+module memory_InvC_marchy#(parameter RAWIDTH = 2,  CAWIDTH = 2)
+				(
+				input clk,
+				input rst,
+				input [RAWIDTH-1:0]RA,
+				input [CAWIDTH-1:0]CA,
+				input we,
+				input datain,
+				input re,
+				output reg dataout
+				);
+
+localparam rDEPTH = 2**RAWIDTH;
+localparam cDEPTH = 2**CAWIDTH;
+
+reg [cDEPTH-1:0] memory [rDEPTH-1:0];
+
+integer i,j;
+
+always @(posedge clk)
+begin
+	if(rst)
+	begin
+		for(i=0; i < 2**RAWIDTH ;i=i+1)
+		begin
+			for(j=0; j < 2**CAWIDTH;j=j+1)
+			begin
+				memory[i][j] <= 0;
+			end
+		end
+	end
+	else
+	begin
+		if(we)
+			memory[RA][CA] <= datain;
+	end
+end
+
+// Inversion fault with victim cell address < aggressor cell address.
+always@(memory[2][3])
+begin
+	memory[0][2] = ~memory[0][2];
+end
+
+always @ (posedge clk)
+begin
+	if(re)
+		dataout <= memory[RA][CA];
+end
+
+endmodule
+
+module memory_fault_select#(parameter RAWIDTH = 2,  CAWIDTH = 2)
+				(
+				input clk,
+				input rst,
+				input [RAWIDTH-1:0]RA,
+				input [CAWIDTH-1:0]CA,
+				input we,
+				input datain,
+				input re,
+				input [1:0] fault,
+				output reg dataout
+				);
+
+wire normal_dataout;
+wire sa_dataout;
+wire transition_dataout;
+wire inversion_dataout;
+
+memory #(
+	.RAWIDTH(RAWIDTH),
+	.CAWIDTH(CAWIDTH)
+) u_memory (
+	.clk(clk),
+	.rst(rst),
+	.RA(RA),
+	.CA(CA),
+	.we(we && (fault == 2'b11)),
+	.datain(datain),
+	.re(re && (fault == 2'b11)),
+	.dataout(normal_dataout)
 );
 
-    input we, re, clk, reset;
-    input [1:0] fault;
-    input [AWIDTH-1:0] wr_addr;
-    input [AWIDTH-1:0] rd_addr;
-    input data_in;
-    output reg data_out;
+memory_SA_marchy #(
+	.RAWIDTH(RAWIDTH),
+	.CAWIDTH(CAWIDTH)
+) u_memory_sa (
+	.clk(clk),
+	.rst(rst),
+	.RA(RA),
+	.CA(CA),
+	.we(we && (fault == 2'b00)),
+	.datain(datain),
+	.re(re && (fault == 2'b00)),
+	.dataout(sa_dataout)
+);
 
-    integer i;
-    integer j;
+memory_T_marchy #(
+	.RAWIDTH(RAWIDTH),
+	.CAWIDTH(CAWIDTH)
+) u_memory_t (
+	.clk(clk),
+	.rst(rst),
+	.RA(RA),
+	.CA(CA),
+	.we(we && (fault == 2'b01)),
+	.datain(datain),
+	.re(re && (fault == 2'b01)),
+	.dataout(transition_dataout)
+);
 
-    reg [3:0] memory [3:0];
-    // reg [1:0] wr_addr[3:2];
-    // reg [1:0] wr_addr[1:0];
-    // reg [1:0] rd_addr[3:2];
-    // reg [1:0] rd_addr[1:0];
-    // {4'b0000,4'b0000,4'b0000,4'b0000};
+memory_InvC_marchy #(
+	.RAWIDTH(RAWIDTH),
+	.CAWIDTH(CAWIDTH)
+) u_memory_invc (
+	.clk(clk),
+	.rst(rst),
+	.RA(RA),
+	.CA(CA),
+	.we(we && (fault == 2'b10)),
+	.datain(datain),
+	.re(re && (fault == 2'b10)),
+	.dataout(inversion_dataout)
+);
 
-    always @(posedge clk) begin
-        if (reset) begin
-            // rd_addr[3:2] <= 0;
-            // rd_addr[1:0] <= 0;
-            data_out <= 0;
-            for (i = 0; i < 4; i = i + 1) begin
-                for (j = 0; j < 4; j = j + 1) begin
-                    memory[i][j] <= 1;
-                end
-            end
-        end else begin
-            if (re) begin
-                // rd_addr[3:2] <= rd_addr[3:2];
-                // rd_addr[1:0] <= rd_addr[1:0];
-                data_out <= memory[rd_addr[1:0]][rd_addr[3:2]];
-            end
-        end
-    end
+always @*
+begin
+	case(fault)
+		2'b00: dataout = sa_dataout;
+		2'b01: dataout = transition_dataout;
+		2'b10: dataout = inversion_dataout;
+		default: dataout = normal_dataout;
+	endcase
+end
 
-    always @(posedge clk) begin
-        if (reset) begin
-            // wr_addr[3:2] <= 0;
-            // wr_addr[1:0] <= 0;
-            data_out <= 0;
-        end else begin
-            if (we) begin
-                // wr_addr[3:2] <= wr_addr[3:2];
-                // wr_addr[1:0] <= wr_addr[1:0];
-                case (fault)
-                    2'b00: begin // stuck at fault
-                        memory[1][1] <= 0;
-                        memory[3][2] <= 1;
-                        if (~((wr_addr[1:0] == 1 && wr_addr[3:2] == 1) ||
-                              (wr_addr[1:0] == 3 && wr_addr[3:2] == 2))) begin
-                            memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
+endmodule
 
-//                          if (wr_addr[1:0] == 1 && wr_addr[3:2] == 1)
-//                              memory[wr_addr[1:0]][wr_addr[3:2]] <= 0; // s-a-0
-//                          else if (wr_addr[1:0] == 3 && wr_addr[3:2] == 2)
-//                              memory[wr_addr[1:0]][wr_addr[3:2]] <= 1; // s-a-1
-//                          else
-//                              memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
-                        end
-                    end
+module MarchY #(parameter RAWIDTH = 2, CAWIDTH = 2)
+				(
+				input clk,
+				input rst,
+				input start,
+				input [1:0] fault,
+				output reg done,
+				output reg fail,
+				output [RAWIDTH-1:0] RA,
+				output [CAWIDTH-1:0] CA,
+				output we,
+				output re,
+				output datain,
+				output dataout
+				);
 
-                    2'b01: begin
-                        if (wr_addr[1:0] == 0 && wr_addr[3:2] == 2) begin
-                            memory[wr_addr[1:0]][wr_addr[3:2]] <= memory[wr_addr[1:0]][wr_addr[3:2]] & data_in; // 0->1 transition fault
-                            $display("0->1 Transisition fault detected");
-                        end else if (wr_addr[1:0] == 2 && wr_addr[3:2] == 0) begin
-                            memory[wr_addr[1:0]][wr_addr[3:2]] <= memory[2][0] | data_in; // 1->0 transition fault
-                            $display("1->0 Transisition fault detected");
-                        end else begin
-                            memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
-                            $display("No transition faults detected");
-                        end
-                    end
+localparam ROWS = 2**RAWIDTH;
+localparam COLS = 2**CAWIDTH;
 
-                    2'b10: begin
-                        if (wr_addr[1:0] == 3 && wr_addr[3:2] == 1) begin
-                            // when (1,3) changes from 0->1, (0,3) toggles
-                            memory[wr_addr[1:0]][wr_addr[3:2]-1] <= memory[wr_addr[1:0]][wr_addr[3:2]-1] ^
-                                                                    ~memory[wr_addr[1:0]][wr_addr[3:2]] & data_in;
-                            memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
-                        end else begin
-                            memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
-                        end
-                    end
+localparam S_IDLE           = 4'd0;
+localparam S_W0             = 4'd1;
+localparam S_UP_R0_WAIT     = 4'd2;
+localparam S_UP_R0_CHECK    = 4'd3;
+localparam S_UP_W1          = 4'd4;
+localparam S_UP_R1_WAIT     = 4'd5;
+localparam S_UP_R1_CHECK    = 4'd6;
+localparam S_DOWN_R1_WAIT   = 4'd7;
+localparam S_DOWN_R1_CHECK  = 4'd8;
+localparam S_DOWN_W0        = 4'd9;
+localparam S_DOWN_R0_WAIT   = 4'd10;
+localparam S_DOWN_R0_CHECK  = 4'd11;
+localparam S_FINAL_R0_WAIT  = 4'd12;
+localparam S_FINAL_R0_CHECK = 4'd13;
+localparam S_DONE           = 4'd14;
 
-                    2'b11: begin
-                        memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
-                    end
-                endcase
-            end
-        end
-    end
+reg [3:0] state;
+reg [RAWIDTH-1:0] row_addr;
+reg [CAWIDTH-1:0] col_addr;
+reg we_reg;
+reg re_reg;
+reg datain_reg;
+
+assign RA = row_addr;
+assign CA = col_addr;
+assign we = we_reg;
+assign re = re_reg;
+assign datain = datain_reg;
+
+memory_fault_select #(
+	.RAWIDTH(RAWIDTH),
+	.CAWIDTH(CAWIDTH)
+) mem_inst (
+	.clk(clk),
+	.rst(rst),
+	.RA(row_addr),
+	.CA(col_addr),
+	.we(we_reg),
+	.datain(datain_reg),
+	.re(re_reg),
+	.fault(fault),
+	.dataout(dataout)
+);
+
+always @(posedge clk)
+begin
+	if(rst)
+	begin
+		state <= S_IDLE;
+		row_addr <= 0;
+		col_addr <= 0;
+		we_reg <= 0;
+		re_reg <= 0;
+		datain_reg <= 0;
+		done <= 0;
+		fail <= 0;
+	end
+	else
+	begin
+		case(state)
+			S_IDLE:
+			begin
+				done <= 0;
+				we_reg <= 0;
+				re_reg <= 0;
+				datain_reg <= 0;
+				row_addr <= 0;
+				col_addr <= 0;
+				if(start)
+				begin
+					fail <= 0;
+					we_reg <= 1;
+					datain_reg <= 0;
+					state <= S_W0;
+				end
+			end
+
+			S_W0:
+			begin
+				we_reg <= 1;
+				re_reg <= 0;
+				datain_reg <= 0;
+				if((row_addr == ROWS-1) && (col_addr == COLS-1))
+				begin
+					row_addr <= 0;
+					col_addr <= 0;
+					we_reg <= 0;
+					re_reg <= 1;
+					state <= S_UP_R0_WAIT;
+				end
+				else if(col_addr == COLS-1)
+				begin
+					row_addr <= row_addr + 1'b1;
+					col_addr <= 0;
+				end
+				else
+				begin
+					col_addr <= col_addr + 1'b1;
+				end
+			end
+
+			S_UP_R0_WAIT:
+			begin
+				we_reg <= 0;
+				re_reg <= 1;
+				state <= S_UP_R0_CHECK;
+			end
+
+			S_UP_R0_CHECK:
+			begin
+				if(dataout != 1'b0)
+					fail <= 1;
+				we_reg <= 1;
+				re_reg <= 0;
+				datain_reg <= 1;
+				state <= S_UP_W1;
+			end
+
+			S_UP_W1:
+			begin
+				we_reg <= 0;
+				re_reg <= 1;
+				state <= S_UP_R1_WAIT;
+			end
+
+			S_UP_R1_WAIT:
+			begin
+				we_reg <= 0;
+				re_reg <= 1;
+				state <= S_UP_R1_CHECK;
+			end
+
+			S_UP_R1_CHECK:
+			begin
+				if(dataout != 1'b1)
+					fail <= 1;
+
+				if((row_addr == ROWS-1) && (col_addr == COLS-1))
+				begin
+					row_addr <= ROWS-1;
+					col_addr <= COLS-1;
+					state <= S_DOWN_R1_WAIT;
+				end
+				else
+				begin
+					if(col_addr == COLS-1)
+					begin
+						row_addr <= row_addr + 1'b1;
+						col_addr <= 0;
+					end
+					else
+					begin
+						col_addr <= col_addr + 1'b1;
+					end
+					state <= S_UP_R0_WAIT;
+				end
+				we_reg <= 0;
+				re_reg <= 1;
+			end
+
+			S_DOWN_R1_WAIT:
+			begin
+				we_reg <= 0;
+				re_reg <= 1;
+				state <= S_DOWN_R1_CHECK;
+			end
+
+			S_DOWN_R1_CHECK:
+			begin
+				if(dataout != 1'b1)
+					fail <= 1;
+				we_reg <= 1;
+				re_reg <= 0;
+				datain_reg <= 0;
+				state <= S_DOWN_W0;
+			end
+
+			S_DOWN_W0:
+			begin
+				we_reg <= 0;
+				re_reg <= 1;
+				state <= S_DOWN_R0_WAIT;
+			end
+
+			S_DOWN_R0_WAIT:
+			begin
+				we_reg <= 0;
+				re_reg <= 1;
+				state <= S_DOWN_R0_CHECK;
+			end
+
+			S_DOWN_R0_CHECK:
+			begin
+				if(dataout != 1'b0)
+					fail <= 1;
+
+				if((row_addr == 0) && (col_addr == 0))
+				begin
+					row_addr <= 0;
+					col_addr <= 0;
+					state <= S_FINAL_R0_WAIT;
+				end
+				else
+				begin
+					if(col_addr == 0)
+					begin
+						row_addr <= row_addr - 1'b1;
+						col_addr <= COLS-1;
+					end
+					else
+					begin
+						col_addr <= col_addr - 1'b1;
+					end
+					state <= S_DOWN_R1_WAIT;
+				end
+				we_reg <= 0;
+				re_reg <= 1;
+			end
+
+			S_FINAL_R0_WAIT:
+			begin
+				we_reg <= 0;
+				re_reg <= 1;
+				state <= S_FINAL_R0_CHECK;
+			end
+
+			S_FINAL_R0_CHECK:
+			begin
+				if(dataout != 1'b0)
+					fail <= 1;
+
+				if((row_addr == ROWS-1) && (col_addr == COLS-1))
+				begin
+					we_reg <= 0;
+					re_reg <= 0;
+					done <= 1;
+					state <= S_DONE;
+				end
+				else
+				begin
+					if(col_addr == COLS-1)
+					begin
+						row_addr <= row_addr + 1'b1;
+						col_addr <= 0;
+					end
+					else
+					begin
+						col_addr <= col_addr + 1'b1;
+					end
+					we_reg <= 0;
+					re_reg <= 1;
+					state <= S_FINAL_R0_WAIT;
+				end
+			end
+
+			S_DONE:
+			begin
+				we_reg <= 0;
+				re_reg <= 0;
+				if(!start)
+					state <= S_IDLE;
+			end
+
+			default:
+			begin
+				state <= S_IDLE;
+				we_reg <= 0;
+				re_reg <= 0;
+				done <= 0;
+			end
+		endcase
+	end
+end
 
 endmodule
