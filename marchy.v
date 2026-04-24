@@ -309,45 +309,25 @@ module MarchY #(parameter RAWIDTH = 2, CAWIDTH = 2)
 				input [1:0] fault,
 				output reg done,
 				output reg fail,
-				output [RAWIDTH-1:0] RA,
-				output [CAWIDTH-1:0] CA,
-				output we,
-				output re,
-				output datain,
+				output reg [RAWIDTH-1:0] RA,
+				output reg [CAWIDTH-1:0] CA,
+				output reg we,
+				output reg re,
+				output reg datain,
 				output dataout
 				);
 
 localparam ROWS = 2**RAWIDTH;
 localparam COLS = 2**CAWIDTH;
+localparam CELL_COUNT = ROWS * COLS;
 
-localparam S_IDLE           = 4'd0;
-localparam S_W0             = 4'd1;
-localparam S_UP_R0_WAIT     = 4'd2;
-localparam S_UP_R0_CHECK    = 4'd3;
-localparam S_UP_W1          = 4'd4;
-localparam S_UP_R1_WAIT     = 4'd5;
-localparam S_UP_R1_CHECK    = 4'd6;
-localparam S_DOWN_R1_WAIT   = 4'd7;
-localparam S_DOWN_R1_CHECK  = 4'd8;
-localparam S_DOWN_W0        = 4'd9;
-localparam S_DOWN_R0_WAIT   = 4'd10;
-localparam S_DOWN_R0_CHECK  = 4'd11;
-localparam S_FINAL_R0_WAIT  = 4'd12;
-localparam S_FINAL_R0_CHECK = 4'd13;
-localparam S_DONE           = 4'd14;
-
+reg Test;
 reg [3:0] state;
-reg [RAWIDTH-1:0] row_addr;
-reg [CAWIDTH-1:0] col_addr;
-reg we_reg;
-reg re_reg;
-reg datain_reg;
-
-assign RA = row_addr;
-assign CA = col_addr;
-assign we = we_reg;
-assign re = re_reg;
-assign datain = datain_reg;
+reg [3:0] nextstate;
+reg [31:0] count;
+reg element_done;
+reg [1:0] element_operation;
+reg fresh_state;
 
 memory_fault_select #(
 	.RAWIDTH(RAWIDTH),
@@ -355,240 +335,353 @@ memory_fault_select #(
 ) mem_inst (
 	.clk(clk),
 	.rst(rst),
-	.RA(row_addr),
-	.CA(col_addr),
-	.we(we_reg),
-	.datain(datain_reg),
-	.re(re_reg),
+	.RA(RA),
+	.CA(CA),
+	.we(we),
+	.datain(datain),
+	.re(re),
 	.fault(fault),
 	.dataout(dataout)
 );
+
+// Drive the memory interface from the current March element and operation.
+always @*
+begin
+	we = 0;
+	re = 0;
+	datain = 0;
+
+	if(Test && !fresh_state && !element_done)
+	begin
+		case(state)
+			3'd0:
+			begin
+				// W0 (updown)
+				we = 1;
+				datain = 0;
+			end
+
+			3'd1:
+			begin
+				// R0,W1,R1 (up)
+				case(element_operation)
+					2'b00: re = 1;                       // R0
+					2'b01: begin we = 1; datain = 1; end // W1
+					2'b10: re = 1;                       // R1
+					2'b11: re = 1;                       // check R1
+				endcase
+			end
+
+			3'd2:
+			begin
+				// R1,W0,R0 (down)
+				case(element_operation)
+					2'b00: re = 1;                       // R1
+					2'b01: begin we = 1; datain = 0; end // W0
+					2'b10: re = 1;                       // R0
+					2'b11: re = 1;                       // check R0
+				endcase
+			end
+
+			3'd3:
+			begin
+				// R0 (updown)
+				re = 1;
+			end
+		endcase
+	end
+end
 
 always @(posedge clk)
 begin
 	if(rst)
 	begin
-		state <= S_IDLE;
-		row_addr <= 0;
-		col_addr <= 0;
-		we_reg <= 0;
-		re_reg <= 0;
-		datain_reg <= 0;
+		Test <= 0;
 		done <= 0;
 		fail <= 0;
+		state <= 3'd0;
+		nextstate <= 3'd0;
+		RA <= 0;
+		CA <= 0;
+		count <= 0;
+		element_done <= 0;
+		element_operation <= 0;
+		fresh_state <= 1;
 	end
-	else
+	else if(!start)
+	begin
+		Test <= 0;
+		done <= 0;
+		fail <= 0;
+		state <= 3'd0;
+		nextstate <= 3'd0;
+		RA <= 0;
+		CA <= 0;
+		count <= 0;
+		element_done <= 0;
+		element_operation <= 0;
+		fresh_state <= 1;
+	end
+	else if(!Test && !done)
+	begin
+		Test <= 1;
+		done <= 0;
+		fail <= 0;
+		state <= 3'd0;
+		nextstate <= 3'd0;
+		RA <= 0;
+		CA <= 0;
+		count <= 0;
+		element_done <= 0;
+		element_operation <= 0;
+		fresh_state <= 1;
+	end
+	else if(Test)
 	begin
 		case(state)
-			S_IDLE:
+			3'd0:
 			begin
-				done <= 0;
-				we_reg <= 0;
-				re_reg <= 0;
-				datain_reg <= 0;
-				row_addr <= 0;
-				col_addr <= 0;
-				if(start)
+				// W0 (updown)
+				if(fresh_state == 1)
 				begin
-					fail <= 0;
-					we_reg <= 1;
-					datain_reg <= 0;
-					state <= S_W0;
+					// Set the address to the first cell.
+					RA <= 0;
+					CA <= 0;
+					count <= 0;
+					element_done <= 0;
+					fresh_state <= 0;
 				end
-			end
-
-			S_W0:
-			begin
-				we_reg <= 1;
-				re_reg <= 0;
-				datain_reg <= 0;
-				if((row_addr == ROWS-1) && (col_addr == COLS-1))
+				else if(element_done)
 				begin
-					row_addr <= 0;
-					col_addr <= 0;
-					we_reg <= 0;
-					re_reg <= 1;
-					state <= S_UP_R0_WAIT;
-				end
-				else if(col_addr == COLS-1)
-				begin
-					row_addr <= row_addr + 1'b1;
-					col_addr <= 0;
-				end
-				else
-				begin
-					col_addr <= col_addr + 1'b1;
-				end
-			end
-
-			S_UP_R0_WAIT:
-			begin
-				we_reg <= 0;
-				re_reg <= 1;
-				state <= S_UP_R0_CHECK;
-			end
-
-			S_UP_R0_CHECK:
-			begin
-				if(dataout != 1'b0)
-					fail <= 1;
-				we_reg <= 1;
-				re_reg <= 0;
-				datain_reg <= 1;
-				state <= S_UP_W1;
-			end
-
-			S_UP_W1:
-			begin
-				we_reg <= 0;
-				re_reg <= 1;
-				state <= S_UP_R1_WAIT;
-			end
-
-			S_UP_R1_WAIT:
-			begin
-				we_reg <= 0;
-				re_reg <= 1;
-				state <= S_UP_R1_CHECK;
-			end
-
-			S_UP_R1_CHECK:
-			begin
-				if(dataout != 1'b1)
-					fail <= 1;
-
-				if((row_addr == ROWS-1) && (col_addr == COLS-1))
-				begin
-					row_addr <= ROWS-1;
-					col_addr <= COLS-1;
-					state <= S_DOWN_R1_WAIT;
-				end
-				else
-				begin
-					if(col_addr == COLS-1)
+					element_done <= 0;
+					if(count == CELL_COUNT-1)
 					begin
-						row_addr <= row_addr + 1'b1;
-						col_addr <= 0;
+						// W0 (updown) done.
+						nextstate <= 3'd1;
+						state <= 3'd1;
+						fresh_state <= 1;
 					end
 					else
 					begin
-						col_addr <= col_addr + 1'b1;
+						count <= count + 1;
+						if(CA == COLS-1)
+						begin
+							RA <= RA + 1'b1;
+							CA <= 0;
+						end
+						else
+							CA <= CA + 1'b1;
 					end
-					state <= S_UP_R0_WAIT;
-				end
-				we_reg <= 0;
-				re_reg <= 1;
-			end
-
-			S_DOWN_R1_WAIT:
-			begin
-				we_reg <= 0;
-				re_reg <= 1;
-				state <= S_DOWN_R1_CHECK;
-			end
-
-			S_DOWN_R1_CHECK:
-			begin
-				if(dataout != 1'b1)
-					fail <= 1;
-				we_reg <= 1;
-				re_reg <= 0;
-				datain_reg <= 0;
-				state <= S_DOWN_W0;
-			end
-
-			S_DOWN_W0:
-			begin
-				we_reg <= 0;
-				re_reg <= 1;
-				state <= S_DOWN_R0_WAIT;
-			end
-
-			S_DOWN_R0_WAIT:
-			begin
-				we_reg <= 0;
-				re_reg <= 1;
-				state <= S_DOWN_R0_CHECK;
-			end
-
-			S_DOWN_R0_CHECK:
-			begin
-				if(dataout != 1'b0)
-					fail <= 1;
-
-				if((row_addr == 0) && (col_addr == 0))
-				begin
-					row_addr <= 0;
-					col_addr <= 0;
-					state <= S_FINAL_R0_WAIT;
 				end
 				else
 				begin
-					if(col_addr == 0)
+					// W0 is issued by the memory control block in this cycle.
+					element_done <= 1;
+				end
+			end
+
+			3'd1:
+			begin
+				// R0,W1,R1 (up)
+				if(fresh_state == 1)
+				begin
+					// Set the address to the first cell.
+					RA <= 0;
+					CA <= 0;
+					count <= 0;
+					element_done <= 0;
+					element_operation <= 0;
+					fresh_state <= 0;
+				end
+				else if(element_done)
+				begin
+					element_done <= 0;
+					element_operation <= 0;
+					if(count == CELL_COUNT-1)
 					begin
-						row_addr <= row_addr - 1'b1;
-						col_addr <= COLS-1;
+						// R0,W1,R1 (up) done.
+						nextstate <= 3'd2;
+						state <= 3'd2;
+						fresh_state <= 1;
 					end
 					else
 					begin
-						col_addr <= col_addr - 1'b1;
+						count <= count + 1;
+						if(CA == COLS-1)
+						begin
+							RA <= RA + 1'b1;
+							CA <= 0;
+						end
+						else
+							CA <= CA + 1'b1;
 					end
-					state <= S_DOWN_R1_WAIT;
-				end
-				we_reg <= 0;
-				re_reg <= 1;
-			end
-
-			S_FINAL_R0_WAIT:
-			begin
-				we_reg <= 0;
-				re_reg <= 1;
-				state <= S_FINAL_R0_CHECK;
-			end
-
-			S_FINAL_R0_CHECK:
-			begin
-				if(dataout != 1'b0)
-					fail <= 1;
-
-				if((row_addr == ROWS-1) && (col_addr == COLS-1))
-				begin
-					we_reg <= 0;
-					re_reg <= 0;
-					done <= 1;
-					state <= S_DONE;
 				end
 				else
 				begin
-					if(col_addr == COLS-1)
-					begin
-						row_addr <= row_addr + 1'b1;
-						col_addr <= 0;
-					end
-					else
-					begin
-						col_addr <= col_addr + 1'b1;
-					end
-					we_reg <= 0;
-					re_reg <= 1;
-					state <= S_FINAL_R0_WAIT;
+					case(element_operation)
+						2'b00:
+						begin
+							// R0: read is issued in this cycle.
+							element_operation <= 2'b01;
+						end
+
+						2'b01:
+						begin
+							// Check R0, then W1 is issued in this cycle.
+							if(dataout != 0)
+								fail <= 1;
+							element_operation <= 2'b10;
+						end
+
+						2'b10:
+						begin
+							// R1: read is issued in this cycle.
+							element_operation <= 2'b11;
+						end
+
+						2'b11:
+						begin
+							// Check R1.
+							if(dataout != 1)
+								fail <= 1;
+							element_done <= 1;
+						end
+					endcase
 				end
 			end
 
-			S_DONE:
+			3'd2:
 			begin
-				we_reg <= 0;
-				re_reg <= 0;
-				if(!start)
-					state <= S_IDLE;
+				// R1,W0,R0 (down)
+				if(fresh_state == 1)
+				begin
+					// Set the address to the last cell.
+					RA <= ROWS-1;
+					CA <= COLS-1;
+					count <= 0;
+					element_done <= 0;
+					element_operation <= 0;
+					fresh_state <= 0;
+				end
+				else if(element_done)
+				begin
+					element_done <= 0;
+					element_operation <= 0;
+					if(count == CELL_COUNT-1)
+					begin
+						// R1,W0,R0 (down) done.
+						nextstate <= 3'd3;
+						state <= 3'd3;
+						fresh_state <= 1;
+					end
+					else
+					begin
+						count <= count + 1;
+						if(CA == 0)
+						begin
+							RA <= RA - 1'b1;
+							CA <= COLS-1;
+						end
+						else
+							CA <= CA - 1'b1;
+					end
+				end
+				else
+				begin
+					case(element_operation)
+						2'b00:
+						begin
+							// R1: read is issued in this cycle.
+							element_operation <= 2'b01;
+						end
+
+						2'b01:
+						begin
+							// Check R1, then W0 is issued in this cycle.
+							if(dataout != 1)
+								fail <= 1;
+							element_operation <= 2'b10;
+						end
+
+						2'b10:
+						begin
+							// R0: read is issued in this cycle.
+							element_operation <= 2'b11;
+						end
+
+						2'b11:
+						begin
+							// Check R0.
+							if(dataout != 0)
+								fail <= 1;
+							element_done <= 1;
+						end
+					endcase
+				end
 			end
 
-			default:
+			3'd3:
 			begin
-				state <= S_IDLE;
-				we_reg <= 0;
-				re_reg <= 0;
-				done <= 0;
+				// R0 (updown)
+				if(fresh_state == 1)
+				begin
+					// Set the address to the first cell.
+					RA <= 0;
+					CA <= 0;
+					count <= 0;
+					element_done <= 0;
+					element_operation <= 0;
+					fresh_state <= 0;
+				end
+				else if(element_done)
+				begin
+					element_done <= 0;
+					if(count == CELL_COUNT-1)
+					begin
+						// R0 (updown) done.
+						Test <= 0;
+						done <= 1;
+						nextstate <= 3'd4;
+						state <= 3'd4;
+					end
+					else
+					begin
+						count <= count + 1;
+						if(CA == COLS-1)
+						begin
+							RA <= RA + 1'b1;
+							CA <= 0;
+						end
+						else
+							CA <= CA + 1'b1;
+					end
+				end
+				else
+				begin
+					case(element_operation)
+						2'b00:
+						begin
+							// R0: read is issued in this cycle.
+							element_operation <= 2'b01;
+						end
+
+						2'b01:
+						begin
+							// Check R0.
+							if(dataout != 0)
+								fail <= 1;
+							element_done <= 1;
+							element_operation <= 2'b00;
+						end
+					endcase
+				end
+			end
+
+			3'd4:
+			begin
+				// Test complete. Hold done/fail until start is deasserted.
+				Test <= 0;
+				done <= 1;
 			end
 		endcase
 	end
