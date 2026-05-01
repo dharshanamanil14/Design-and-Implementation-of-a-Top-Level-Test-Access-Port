@@ -435,8 +435,7 @@ module ram #(
                     2'b10: begin
                         if (wr_addr[1:0] == 3 && wr_addr[3:2] == 1) begin
                             // when (1,3) changes from 0->1, (0,3) toggles
-                            memory[wr_addr[1:0]][wr_addr[3:2]-1] <= memory[wr_addr[1:0]][wr_addr[3:2]-1] ^
-                                                                    ~memory[wr_addr[1:0]][wr_addr[3:2]] & data_in;
+                            memory[wr_addr[1:0]][wr_addr[3:2]-1] <= memory[wr_addr[1:0]][wr_addr[3:2]-1] ^ (memory[wr_addr[1:0]][wr_addr[3:2]] ^ data_in);
                             memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
                         end else begin
                             memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
