@@ -1,12 +1,5 @@
 `timescale 1ns / 1ps
 
-//(1)Transaction of only bit is allowed(i.e datain and dataout are of 1 bit each) 
-//   since march algorithm is primarily useful for cell testing.
-//(2)4x4 memory array created. A cell can be selected by giving both row address(RA)
-//   and column address(CA)
-//(3)fault opcode: 00=stuck-at, 01=transition, 10=inversion coupling, 11=normal
-
-
 module memory#(parameter RAWIDTH = 2,  CAWIDTH = 2) //RAWIDTH=Row Adress Width and CAWIDTH=Column address width
 				(
 				// Clock and Reset
@@ -99,8 +92,9 @@ begin
 			memory[RA][CA] <= datain;
 	end
 
-	memory[1][1] <= 0;
-	memory[3][2] <= 1;
+	memory[0][1] <= 1;
+	memory[0][0] <= 0;
+	memory[3][0] <= 1;
 end
 
 always @ (posedge clk)
@@ -149,14 +143,9 @@ begin
 	end
 end
 
-always @(memory[0][2])
+always @(negedge memory[1][3])
 begin
-	memory[0][2] = memory[0][2] & datain;
-end
-
-always @(memory[2][0])
-begin
-	memory[2][0] = memory[2][0] & datain;
+	memory[1][3] = ~memory[1][3];
 end
 
 always @ (posedge clk)
@@ -206,9 +195,9 @@ begin
 end
 
 // Inversion fault with victim cell address < aggressor cell address.
-always@(memory[1][3])
+always@(memory[2][3])
 begin
-	memory[0][3] = memory[0][3] ^ (memory[1][3] ^ datain);
+	memory[0][2] = ~memory[0][2];
 end
 
 always @ (posedge clk)
@@ -219,475 +208,386 @@ end
 
 endmodule
 
-module memory_fault_select#(parameter RAWIDTH = 2,  CAWIDTH = 2)
+
+
+
+module MBIST_Controller#(parameter RAWIDTH = 2,  CAWIDTH = 2)
 				(
 				input clk,
 				input rst,
-				input [RAWIDTH-1:0]RA,
-				input [CAWIDTH-1:0]CA,
-				input we,
-				input datain,
-				input re,
-				input [1:0] fault,
-				output reg dataout
+				input Test,
+				output reg status
 				);
 
-wire normal_dataout;
-wire sa_dataout;
-wire transition_dataout;
-wire inversion_dataout;
+//internal registers
+localparam integer maxsize = 2**RAWIDTH;
+localparam integer CELL_COUNT = maxsize * maxsize;
 
-memory #(
-	.RAWIDTH(RAWIDTH),
-	.CAWIDTH(CAWIDTH)
-) u_memory (
-	.clk(clk),
-	.rst(rst),
-	.RA(RA),
-	.CA(CA),
-	.we(we && (fault == 2'b11)),
-	.datain(datain),
-	.re(re && (fault == 2'b11)),
-	.dataout(normal_dataout)
-);
-
-memory_SA_marchy #(
-	.RAWIDTH(RAWIDTH),
-	.CAWIDTH(CAWIDTH)
-) u_memory_sa (
-	.clk(clk),
-	.rst(rst),
-	.RA(RA),
-	.CA(CA),
-	.we(we && (fault == 2'b00)),
-	.datain(datain),
-	.re(re && (fault == 2'b00)),
-	.dataout(sa_dataout)
-);
-
-memory_T_marchy #(
-	.RAWIDTH(RAWIDTH),
-	.CAWIDTH(CAWIDTH)
-) u_memory_t (
-	.clk(clk),
-	.rst(rst),
-	.RA(RA),
-	.CA(CA),
-	.we(we && (fault == 2'b01)),
-	.datain(datain),
-	.re(re && (fault == 2'b01)),
-	.dataout(transition_dataout)
-);
-
-memory_InvC_marchy #(
-	.RAWIDTH(RAWIDTH),
-	.CAWIDTH(CAWIDTH)
-) u_memory_invc (
-	.clk(clk),
-	.rst(rst),
-	.RA(RA),
-	.CA(CA),
-	.we(we && (fault == 2'b10)),
-	.datain(datain),
-	.re(re && (fault == 2'b10)),
-	.dataout(inversion_dataout)
-);
-
-always @*
-begin
-	case(fault)
-		2'b00: dataout = sa_dataout;
-		2'b01: dataout = transition_dataout;
-		2'b10: dataout = inversion_dataout;
-		default: dataout = normal_dataout;
-	endcase
-end
-
-endmodule
-
-module MarchY #(parameter RAWIDTH = 2, CAWIDTH = 2)
-				(
-				input clk,
-				input rst,
-				input start,
-				input [1:0] fault,
-				output reg done,
-				output reg fail,
-				output reg [RAWIDTH-1:0] RA,
-				output reg [CAWIDTH-1:0] CA,
-				output reg we,
-				output reg re,
-				output reg datain,
-				output dataout
-				);
-
-localparam ROWS = 2**RAWIDTH;
-localparam COLS = 2**CAWIDTH;
-localparam CELL_COUNT = ROWS * COLS;
-
-reg Test;
-reg [3:0] state;
-reg [3:0] nextstate;
-reg [31:0] count;
+reg [31:0]count;
 reg element_done;
-reg [1:0] element_operation;
+reg [1:0]element_operation;
 reg fresh_state;
+reg [3:0]state;
 
-memory_fault_select #(
-	.RAWIDTH(RAWIDTH),
-	.CAWIDTH(CAWIDTH)
-) mem_inst (
-	.clk(clk),
-	.rst(rst),
-	.RA(RA),
-	.CA(CA),
-	.we(we),
-	.datain(datain),
-	.re(re),
-	.fault(fault),
-	.dataout(dataout)
-);
+//signals and registers used to input the data into the memory through the system
+reg [RAWIDTH-1:0] RA;
+reg [CAWIDTH-1:0] CA;
+reg we,re;
+reg datain;
+wire dataout;
+integer i,j;
 
-// Drive the memory interface from the current March element and operation.
-always @*
+initial
 begin
+	count = 0;
+	element_done = 0;
+	element_operation = 0;
+	fresh_state = 1;
+	state = 3'd0;
+	status = 0;
+	RA = 0;
+	CA = 0;
 	we = 0;
 	re = 0;
 	datain = 0;
+end
 
-	if(Test && !fresh_state && !element_done)
+memory u(   //Clock and Reset
+            .clk(clk),
+            .rst(rst),
+            //Row and Column Address
+            .RA(RA),
+            .CA(CA),
+            //Write Interface
+            .we(we),
+            .datain(datain),
+            //Read Interface
+            .re(re),
+            .dataout(dataout)
+        );
+
+// The memory acts on posedge clk, so this controller updates controls on negedge clk.
+// This keeps RA, CA, we, re, and datain stable before the memory samples them.
+always @(negedge clk)
+begin
+	if(rst || !Test)
+	begin
+		count = 0;
+		element_done = 0;
+		element_operation = 0;
+		fresh_state = 1;
+		state = 3'd0;
+		status = 0;
+		RA = 0;
+		CA = 0;
+		we = 0;
+		re = 0;
+		datain = 0;
+	end
+	else
 	begin
 		case(state)
 			3'd0:
 			begin
 				// W0 (updown)
-				we = 1;
-				datain = 0;
+				if(fresh_state == 1)
+				begin
+					RA = 0;
+					CA = 0;
+					count = 0;
+					fresh_state = 0;
+					$display("W0 (updown) beginning");
+				end
+				else if(count == CELL_COUNT-1)
+				begin
+					we = 0;
+					re = 0;
+					count = 0;
+					element_operation = 0;
+					fresh_state = 1;
+					state = 3'd1;
+					$display("W0 (updown) done");
+				end
+				else
+				begin
+					count = count+1;
+					if(CA == maxsize-1)
+					begin
+						RA = RA+1;
+						CA = 0;
+					end
+					else
+						CA = CA+1;
+				end
+
+				if(state == 3'd0)
+				begin
+					datain = 0;
+					we = 1;
+					re = 0;
+				end
 			end
 
 			3'd1:
 			begin
 				// R0,W1,R1 (up)
-				case(element_operation)
-					2'b00: re = 1;                       // R0
-					2'b01: begin we = 1; datain = 1; end // W1
-					2'b10: re = 1;                       // R1
-					2'b11: re = 1;                       // check R1
-				endcase
+				if(fresh_state == 1)
+				begin
+					$display("R0,W1,R1 (up) beginning");
+					RA = 0;
+					CA = 0;
+					count = 0;
+					element_done = 0;
+					element_operation = 0;
+					fresh_state = 0;
+				end
+
+				if(element_done && count == CELL_COUNT-1)
+				begin
+					we = 0;
+					re = 0;
+					count = 0;
+					element_done = 0;
+					element_operation = 0;
+					fresh_state = 1;
+					state = 3'd2;
+					$display("R0,W1,R1 (up) done");
+				end
+				else
+				begin
+					if(element_done)
+					begin
+						element_done = 0;
+						count = count+1;
+						if(CA == maxsize-1)
+						begin
+							RA = RA+1;
+							CA = 0;
+						end
+						else
+							CA = CA+1;
+					end
+
+					case(element_operation)
+						2'b00:
+						begin
+							//R0
+							we = 0;
+							re = 1;
+							element_operation = 2'b01;
+						end
+
+						2'b01:
+						begin
+							//check R0, W1
+							if(dataout !== 1'b0)
+								status = 1;
+							we = 1;
+							re = 0;
+							datain = 1;
+							element_operation = 2'b10;
+						end
+
+						2'b10:
+						begin
+							//R1
+							we = 0;
+							re = 1;
+							element_operation = 2'b11;
+						end
+
+						2'b11:
+						begin
+							//check R1
+							if(dataout !== 1'b1)
+								status = 1;
+							we = 0;
+							re = 0;
+							element_done = 1;
+							element_operation = 2'b00;
+						end
+					endcase
+				end
 			end
 
 			3'd2:
 			begin
 				// R1,W0,R0 (down)
-				case(element_operation)
-					2'b00: re = 1;                       // R1
-					2'b01: begin we = 1; datain = 0; end // W0
-					2'b10: re = 1;                       // R0
-					2'b11: re = 1;                       // check R0
-				endcase
+				if(fresh_state == 1)
+				begin
+					$display("R1,W0,R0 (down) beginning");
+					RA = maxsize-1;
+					CA = maxsize-1;
+					count = 0;
+					element_done = 0;
+					element_operation = 0;
+					fresh_state = 0;
+				end
+
+				if(element_done && count == CELL_COUNT-1)
+				begin
+					we = 0;
+					re = 0;
+					count = 0;
+					element_done = 0;
+					element_operation = 0;
+					fresh_state = 1;
+					state = 3'd3;
+					$display("R1,W0,R0 (down) done");
+				end
+				else
+				begin
+					if(element_done)
+					begin
+						element_done = 0;
+						count = count+1;
+						if(CA == 0)
+						begin
+							RA = RA-1;
+							CA = maxsize-1;
+						end
+						else
+							CA = CA-1;
+					end
+
+					case(element_operation)
+						2'b00:
+						begin
+							//R1
+							we = 0;
+							re = 1;
+							element_operation = 2'b01;
+						end
+
+						2'b01:
+						begin
+							//check R1, W0
+							if(dataout !== 1'b1)
+								status = 1;
+							we = 1;
+							re = 0;
+							datain = 0;
+							element_operation = 2'b10;
+						end
+
+						2'b10:
+						begin
+							//R0
+							we = 0;
+							re = 1;
+							element_operation = 2'b11;
+						end
+
+						2'b11:
+						begin
+							//check R0
+							if(dataout !== 1'b0)
+								status = 1;
+							we = 0;
+							re = 0;
+							element_done = 1;
+							element_operation = 2'b00;
+						end
+					endcase
+				end
 			end
 
 			3'd3:
 			begin
 				// R0 (updown)
-				re = 1;
+				if(fresh_state == 1)
+				begin
+					$display("R0 (updown) beginning");
+					RA = 0;
+					CA = 0;
+					count = 0;
+					element_done = 0;
+					element_operation = 0;
+					fresh_state = 0;
+				end
+
+				if(element_done && count == CELL_COUNT-1)
+				begin
+					we = 0;
+					re = 0;
+					$display("R0 (updown) done");
+					if(status)
+						$display("Memory Test Failed");
+					else
+						$display("Memory Test Passed");
+					$finish;
+				end
+				else
+				begin
+					if(element_done)
+					begin
+						element_done = 0;
+						count = count+1;
+						if(CA == maxsize-1)
+						begin
+							RA = RA+1;
+							CA = 0;
+						end
+						else
+							CA = CA+1;
+					end
+
+					case(element_operation)
+						2'b00:
+						begin
+							//R0
+							we = 0;
+							re = 1;
+							element_operation = 2'b01;
+						end
+
+						2'b01:
+						begin
+							//check R0
+							if(dataout !== 1'b0)
+								status = 1;
+							we = 0;
+							re = 0;
+							element_done = 1;
+							element_operation = 2'b00;
+						end
+					endcase
+				end
+			end
+
+			default:
+			begin
+				state = 3'd0;
+				fresh_state = 1;
 			end
 		endcase
 	end
 end
 
-always @(posedge clk)
+//Print the test result
+always @(Test, status)
 begin
-	if(rst)
+	if(Test)
+		if(status)
+		begin
+			$display("Error found !!");
+			$display("Memory Test Failed");
+		end
+end
+
+always @(negedge clk)
+begin
+	if(Test)
 	begin
-		Test <= 0;
-		done <= 0;
-		fail <= 0;
-		state <= 3'd0;
-		nextstate <= 3'd0;
-		RA <= 0;
-		CA <= 0;
-		count <= 0;
-		element_done <= 0;
-		element_operation <= 0;
-		fresh_state <= 1;
-	end
-	else if(!start)
-	begin
-		Test <= 0;
-		done <= 0;
-		fail <= 0;
-		state <= 3'd0;
-		nextstate <= 3'd0;
-		RA <= 0;
-		CA <= 0;
-		count <= 0;
-		element_done <= 0;
-		element_operation <= 0;
-		fresh_state <= 1;
-	end
-	else if(!Test && !done)
-	begin
-		Test <= 1;
-		done <= 0;
-		fail <= 0;
-		state <= 3'd0;
-		nextstate <= 3'd0;
-		RA <= 0;
-		CA <= 0;
-		count <= 0;
-		element_done <= 0;
-		element_operation <= 0;
-		fresh_state <= 1;
-	end
-	else if(Test)
-	begin
-		case(state)
-			3'd0:
+		for(i=0; i<maxsize; i=i+1)
+		begin
+			for(j=0; j<maxsize; j=j+1)
 			begin
-				// W0 (updown)
-				if(fresh_state == 1)
-				begin
-					// Set the address to the first cell.
-					RA <= 0;
-					CA <= 0;
-					count <= 0;
-					element_done <= 0;
-					fresh_state <= 0;
-				end
-				else if(element_done)
-				begin
-					element_done <= 0;
-					if(count == CELL_COUNT-1)
-					begin
-						// W0 (updown) done.
-						nextstate <= 3'd1;
-						state <= 3'd1;
-						fresh_state <= 1;
-					end
-					else
-					begin
-						count <= count + 1;
-						if(CA == COLS-1)
-						begin
-							RA <= RA + 1'b1;
-							CA <= 0;
-						end
-						else
-							CA <= CA + 1'b1;
-					end
-				end
-				else
-				begin
-					// W0 is issued by the memory control block in this cycle.
-					element_done <= 1;
-				end
+				$write("%b",u.memory[i][j]);
 			end
-
-			3'd1:
-			begin
-				// R0,W1,R1 (up)
-				if(fresh_state == 1)
-				begin
-					// Set the address to the first cell.
-					RA <= 0;
-					CA <= 0;
-					count <= 0;
-					element_done <= 0;
-					element_operation <= 0;
-					fresh_state <= 0;
-				end
-				else if(element_done)
-				begin
-					element_done <= 0;
-					element_operation <= 0;
-					if(count == CELL_COUNT-1)
-					begin
-						// R0,W1,R1 (up) done.
-						nextstate <= 3'd2;
-						state <= 3'd2;
-						fresh_state <= 1;
-					end
-					else
-					begin
-						count <= count + 1;
-						if(CA == COLS-1)
-						begin
-							RA <= RA + 1'b1;
-							CA <= 0;
-						end
-						else
-							CA <= CA + 1'b1;
-					end
-				end
-				else
-				begin
-					case(element_operation)
-						2'b00:
-						begin
-							// R0: read is issued in this cycle.
-							element_operation <= 2'b01;
-						end
-
-						2'b01:
-						begin
-							// Check R0, then W1 is issued in this cycle.
-							if(dataout != 0)
-								fail <= 1;
-							element_operation <= 2'b10;
-						end
-
-						2'b10:
-						begin
-							// R1: read is issued in this cycle.
-							element_operation <= 2'b11;
-						end
-
-						2'b11:
-						begin
-							// Check R1.
-							if(dataout != 1)
-								fail <= 1;
-							element_done <= 1;
-						end
-					endcase
-				end
-			end
-
-			3'd2:
-			begin
-				// R1,W0,R0 (down)
-				if(fresh_state == 1)
-				begin
-					// Set the address to the last cell.
-					RA <= ROWS-1;
-					CA <= COLS-1;
-					count <= 0;
-					element_done <= 0;
-					element_operation <= 0;
-					fresh_state <= 0;
-				end
-				else if(element_done)
-				begin
-					element_done <= 0;
-					element_operation <= 0;
-					if(count == CELL_COUNT-1)
-					begin
-						// R1,W0,R0 (down) done.
-						nextstate <= 3'd3;
-						state <= 3'd3;
-						fresh_state <= 1;
-					end
-					else
-					begin
-						count <= count + 1;
-						if(CA == 0)
-						begin
-							RA <= RA - 1'b1;
-							CA <= COLS-1;
-						end
-						else
-							CA <= CA - 1'b1;
-					end
-				end
-				else
-				begin
-					case(element_operation)
-						2'b00:
-						begin
-							// R1: read is issued in this cycle.
-							element_operation <= 2'b01;
-						end
-
-						2'b01:
-						begin
-							// Check R1, then W0 is issued in this cycle.
-							if(dataout != 1)
-								fail <= 1;
-							element_operation <= 2'b10;
-						end
-
-						2'b10:
-						begin
-							// R0: read is issued in this cycle.
-							element_operation <= 2'b11;
-						end
-
-						2'b11:
-						begin
-							// Check R0.
-							if(dataout != 0)
-								fail <= 1;
-							element_done <= 1;
-						end
-					endcase
-				end
-			end
-
-			3'd3:
-			begin
-				// R0 (updown)
-				if(fresh_state == 1)
-				begin
-					// Set the address to the first cell.
-					RA <= 0;
-					CA <= 0;
-					count <= 0;
-					element_done <= 0;
-					element_operation <= 0;
-					fresh_state <= 0;
-				end
-				else if(element_done)
-				begin
-					element_done <= 0;
-					if(count == CELL_COUNT-1)
-					begin
-						// R0 (updown) done.
-						Test <= 0;
-						done <= 1;
-						nextstate <= 3'd4;
-						state <= 3'd4;
-					end
-					else
-					begin
-						count <= count + 1;
-						if(CA == COLS-1)
-						begin
-							RA <= RA + 1'b1;
-							CA <= 0;
-						end
-						else
-							CA <= CA + 1'b1;
-					end
-				end
-				else
-				begin
-					case(element_operation)
-						2'b00:
-						begin
-							// R0: read is issued in this cycle.
-							element_operation <= 2'b01;
-						end
-
-						2'b01:
-						begin
-							// Check R0.
-							if(dataout != 0)
-								fail <= 1;
-							element_done <= 1;
-							element_operation <= 2'b00;
-						end
-					endcase
-				end
-			end
-
-			3'd4:
-			begin
-				// Test complete. Hold done/fail until start is deasserted.
-				Test <= 0;
-				done <= 1;
-			end
-		endcase
+			$display();
+		end
+		$display();
 	end
 end
 
