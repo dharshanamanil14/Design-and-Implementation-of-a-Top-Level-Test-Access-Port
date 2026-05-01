@@ -92,9 +92,8 @@ begin
 			memory[RA][CA] <= datain;
 	end
 
-	memory[0][1] <= 1;
-	memory[0][0] <= 0;
-	memory[3][0] <= 1;
+	memory[1][1] <= 0;
+	memory[3][2] <= 1;
 end
 
 always @ (posedge clk)
@@ -139,14 +138,19 @@ begin
 	else
 	begin
 		if(we)
-			memory[RA][CA] <= datain;
+		begin
+			if(RA == 0 && CA == 2 && memory[0][2] == 1'b1 && datain == 1'b0)
+				memory[0][2] <= 1'b1; // 1-to-0 transition fault
+			else if(RA == 2 && CA == 0 && memory[2][0] == 1'b0 && datain == 1'b1)
+				memory[2][0] <= 1'b0; // 0-to-1 transition fault
+			else
+				memory[RA][CA] <= datain;
+		end
 	end
 end
 
-always @(negedge memory[1][3])
-begin
-	memory[1][3] = ~memory[1][3];
-end
+
+
 
 always @ (posedge clk)
 begin
