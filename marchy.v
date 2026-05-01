@@ -99,9 +99,8 @@ begin
 			memory[RA][CA] <= datain;
 	end
 
-	memory[0][1] <= 1;
-	memory[0][0] <= 0;
-	memory[3][0] <= 1;
+	memory[1][1] <= 0;
+	memory[3][2] <= 1;
 end
 
 always @ (posedge clk)
@@ -150,9 +149,14 @@ begin
 	end
 end
 
-always @(negedge memory[1][3])
+always @(memory[0][2])
 begin
-	memory[1][3] = ~memory[1][3];
+	memory[0][2] = memory[0][2] & datain;
+end
+
+always @(memory[2][0])
+begin
+	memory[2][0] = memory[2][0] & datain;
 end
 
 always @ (posedge clk)
@@ -202,9 +206,9 @@ begin
 end
 
 // Inversion fault with victim cell address < aggressor cell address.
-always@(memory[2][3])
+always@(memory[1][3])
 begin
-	memory[0][2] = ~memory[0][2];
+	memory[0][3] = memory[0][3] ^ (memory[1][3] ^ datain);
 end
 
 always @ (posedge clk)
