@@ -1,206 +1,110 @@
 `timescale 1ns / 1ps
 
-// Fault opcode: 00=stuck-at, 01=transition, 10=inversion coupling, 11=normal
+module ram #(
+    parameter AWIDTH = 4
+) (
+    clk,
+    reset,
+    wr_addr,
+    rd_addr,
+    data_in,
+    data_out,
+    we,
+    re,
+    fault
+);
 
-module memory#(parameter RAWIDTH = 2, CAWIDTH = 2)
-				(
-				input clk,
-				input rst,
-				input [RAWIDTH-1:0]RA,
-				input [CAWIDTH-1:0]CA,
-				input we,
-				input datain,
-				input re,
-				output reg dataout
-				);
+    input we, re, clk, reset;
+    input [1:0] fault;
+    input [AWIDTH-1:0] wr_addr;
+    input [AWIDTH-1:0] rd_addr;
+    input data_in;
+    output reg data_out;
 
-localparam rDEPTH = 2**RAWIDTH;
-localparam cDEPTH = 2**CAWIDTH;
+    integer i;
+    integer j;
 
-reg [cDEPTH-1:0] memory [rDEPTH-1:0];
+    reg [3:0] memory [3:0];
+    // reg [1:0] wr_addr[3:2];
+    // reg [1:0] wr_addr[1:0];
+    // reg [1:0] rd_addr[3:2];
+    // reg [1:0] rd_addr[1:0];
+    // {4'b0000,4'b0000,4'b0000,4'b0000};
 
-integer i,j;
-
-always @(posedge clk)
-begin
-	if(rst)
-	begin
-		for(i=0; i < 2**RAWIDTH ;i=i+1)
-		begin
-			for(j=0; j < 2**CAWIDTH;j=j+1)
-			begin
-				memory[i][j] <= 0;
+    always @(posedge clk) begin
+        if (reset) begin
+            // rd_addr[3:2] <= 0;
+            // rd_addr[1:0] <= 0;
+            data_out <= 0;
+            for (i = 0; i < 4; i = i + 1) begin
+                for (j = 0; j < 4; j = j + 1) begin
+                    memory[i][j] <= 1;
+	end
+end
+        end else begin
+            if (re) begin
+                // rd_addr[3:2] <= rd_addr[3:2];
+                // rd_addr[1:0] <= rd_addr[1:0];
+                data_out <= memory[rd_addr[1:0]][rd_addr[3:2]];
 			end
 		end
 	end
-	else
-	begin
-		if(we)
-			memory[RA][CA] <= datain;
-	end
-end
 
-always @ (posedge clk)
-begin
-	if(re)
-		dataout <= memory[RA][CA];
-end
-
-endmodule
-
-module memory_SA_marcha#(parameter RAWIDTH = 2, CAWIDTH = 2)
-				(
-				input clk,
-				input rst,
-				input [RAWIDTH-1:0]RA,
-				input [CAWIDTH-1:0]CA,
-				input we,
-				input datain,
-				input re,
-				output reg dataout
-				);
-
-localparam rDEPTH = 2**RAWIDTH;
-localparam cDEPTH = 2**CAWIDTH;
-
-reg [cDEPTH-1:0] memory [rDEPTH-1:0];
-
-integer i,j;
-
-always @(posedge clk)
-begin
-	if(rst)
-	begin
-		for(i=0; i < 2**RAWIDTH ;i=i+1)
-		begin
-			for(j=0; j < 2**CAWIDTH;j=j+1)
-			begin
-				memory[i][j] <= 0;
-			end
-		end
-	end
-	else
-	begin
-		if(we)
-			memory[RA][CA] <= datain;
-	end
-
+    always @(posedge clk) begin
+        if (reset) begin
+            // wr_addr[3:2] <= 0;
+            // wr_addr[1:0] <= 0;
+            data_out <= 0;
+        end else begin
+            if (we) begin
+                // wr_addr[3:2] <= wr_addr[3:2];
+                // wr_addr[1:0] <= wr_addr[1:0];
+                case (fault)
+                    2'b00: begin // stuck at fault
 	memory[1][1] <= 0;
 	memory[3][2] <= 1;
-end
+                        if (~((wr_addr[1:0] == 1 && wr_addr[3:2] == 1) ||
+                              (wr_addr[1:0] == 3 && wr_addr[3:2] == 2))) begin
+                            memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
 
-always @ (posedge clk)
-begin
-	if(re)
-		dataout <= memory[RA][CA];
-end
+//                          if (wr_addr[1:0] == 1 && wr_addr[3:2] == 1)
+//                              memory[wr_addr[1:0]][wr_addr[3:2]] <= 0; // s-a-0
+//                          else if (wr_addr[1:0] == 3 && wr_addr[3:2] == 2)
+//                              memory[wr_addr[1:0]][wr_addr[3:2]] <= 1; // s-a-1
+//                          else
+//                              memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
+                        end
+                    end
 
-endmodule
-
-module memory_T_marcha#(parameter RAWIDTH = 2, CAWIDTH = 2)
-				(
-				input clk,
-				input rst,
-				input [RAWIDTH-1:0]RA,
-				input [CAWIDTH-1:0]CA,
-				input we,
-				input datain,
-				input re,
-				output reg dataout
-				);
-
-localparam rDEPTH = 2**RAWIDTH;
-localparam cDEPTH = 2**CAWIDTH;
-
-reg [cDEPTH-1:0] memory [rDEPTH-1:0];
-
-integer i,j;
-
-always @(posedge clk)
-begin
-	if(rst)
-	begin
-		for(i=0; i < 2**RAWIDTH ;i=i+1)
-		begin
-			for(j=0; j < 2**CAWIDTH;j=j+1)
-			begin
-				memory[i][j] <= 0;
-			end
+                    2'b01: begin
+                        if (wr_addr[1:0] == 0 && wr_addr[3:2] == 2) begin
+                            memory[wr_addr[1:0]][wr_addr[3:2]] <= memory[wr_addr[1:0]][wr_addr[3:2]] & data_in; // 0->1 transition fault
+                            $display("0->1 Transisition fault detected");
+                        end else if (wr_addr[1:0] == 2 && wr_addr[3:2] == 0) begin
+                            memory[wr_addr[1:0]][wr_addr[3:2]] <= memory[2][0] | data_in; // 1->0 transition fault
+                            $display("1->0 Transisition fault detected");
+                        end else begin
+                            memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
+                            $display("No transition faults detected");
 		end
 	end
-	else
-	begin
-		if(we)
-		begin
-			if(RA == 0 && CA == 2 && memory[0][2] == 1'b1 && datain == 1'b0)
-				memory[0][2] <= 1'b1; // 1-to-0 transition fault
-			else if(RA == 2 && CA == 0 && memory[2][0] == 1'b0 && datain == 1'b1)
-				memory[2][0] <= 1'b0; // 0-to-1 transition fault
-			else
-			memory[RA][CA] <= datain;
-	end
+
+                    2'b10: begin
+                        if (wr_addr[1:0] == 3 && wr_addr[3:2] == 1) begin
+                            // when (1,3) changes from 0->1 or 1->0, (0,3) toggles
+                            memory[wr_addr[1:0]][wr_addr[3:2]-1] <= memory[wr_addr[1:0]][wr_addr[3:2]-1] ^ (memory[wr_addr[1:0]][wr_addr[3:2]] ^ data_in);
+                            memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
+                        end else begin
+                            memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
 end
 end
 
-
-
-
-always @ (posedge clk)
-begin
-	if(re)
-		dataout <= memory[RA][CA];
-end
-
-endmodule
-
-module memory_InvC_marcha#(parameter RAWIDTH = 2, CAWIDTH = 2)
-				(
-				input clk,
-				input rst,
-				input [RAWIDTH-1:0]RA,
-				input [CAWIDTH-1:0]CA,
-				input we,
-				input datain,
-				input re,
-				output reg dataout
-				);
-
-localparam rDEPTH = 2**RAWIDTH;
-localparam cDEPTH = 2**CAWIDTH;
-
-reg [cDEPTH-1:0] memory [rDEPTH-1:0];
-
-integer i,j;
-
-always @(posedge clk)
-begin
-	if(rst)
-	begin
-		for(i=0; i < 2**RAWIDTH ;i=i+1)
-		begin
-			for(j=0; j < 2**CAWIDTH;j=j+1)
-			begin
-				memory[i][j] <= 0;
+                    2'b11: begin
+                        memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
+                    end
+                endcase
 			end
 		end
-	end
-	else
-	begin
-		if(we)
-			memory[RA][CA] <= datain;
-	end
-end
-
-// Inversion fault with victim cell address < aggressor cell address.
-always@(memory[2][3])
-begin
-	memory[0][2] = ~memory[0][2];
-end
-
-always @ (posedge clk)
-begin
-	if(re)
-		dataout <= memory[RA][CA];
 end
 
 endmodule
@@ -208,11 +112,15 @@ endmodule
 
 
 
-module MBIST_Controller#(parameter RAWIDTH = 2,  CAWIDTH = 2)
+module MBIST_Controller#(
+				parameter RAWIDTH = 2,
+				parameter CAWIDTH = 2
+				)
 				(
 				input clk,
 				input rst,
 				input Test,
+				input [1:0] FAULT,
 				output reg status
 				);
 
@@ -226,14 +134,16 @@ reg [1:0]element_operation;
 reg fresh_state;
 reg [3:0]state;
 reg [3:0]nextstate;
-
 //signals and registers used to input the data into the memory through the system
 reg [RAWIDTH-1:0] RA;
 reg [CAWIDTH-1:0] CA;
 reg we,re;
 reg datain;
 wire dataout;
+wire [3:0] mem_addr;
 integer i,j;
+
+assign mem_addr = {CA, RA};
 
 initial
 begin
@@ -250,18 +160,16 @@ begin
 	datain = 0;
 end
 
-memory u(   //Clock and Reset
+ram u(      // Same memory interface/behavior as maxchx.v
             .clk(clk),
-            .rst(rst),
-            //Row and Column Address
-            .RA(RA),
-            .CA(CA),
-            //Write Interface
+            .reset(rst),
+            .wr_addr(mem_addr),
+            .rd_addr(mem_addr),
+            .data_in(datain),
+            .data_out(dataout),
             .we(we),
-            .datain(datain),
-            //Read Interface
             .re(re),
-            .dataout(dataout)
+            .fault(FAULT)
         );
 
 
