@@ -30,6 +30,8 @@ parameter RAWIDTH = 2;
 reg clk;
 reg Test;
 reg rst;
+reg [1:0] FAULT;
+// 00=stuck-at, 01=transition, 10=coupling, 11=normal
 wire status;
 
 
@@ -50,16 +52,19 @@ MBIST_Controller #(
     .clk(clk),
     .rst(rst),
     .Test(Test),
+    .FAULT(FAULT),
     .status(status)
 );
 
 initial
 begin
     Test = 0;
-    rst = 1;  //forces all the cells to go to zero and takes controller to ideal state
+    rst = 1;  
+    FAULT=2'b11; //// 00=stuck-at, 01=transition, 10=coupling, 11=normal
     #4;
     Test = 1;
     rst = 0;
+
 end
 
 endmodule
