@@ -39,16 +39,16 @@ module ram #(
             for (i = 0; i < 4; i = i + 1) begin
                 for (j = 0; j < 4; j = j + 1) begin
                     memory[i][j] <= 1;
-	end
-end
+                end
+            end
         end else begin
             if (re) begin
                 // rd_addr[3:2] <= rd_addr[3:2];
                 // rd_addr[1:0] <= rd_addr[1:0];
                 data_out <= memory[rd_addr[1:0]][rd_addr[3:2]];
-			end
-		end
-	end
+            end
+        end
+    end
 
     always @(posedge clk) begin
         if (reset) begin
@@ -61,8 +61,8 @@ end
                 // wr_addr[1:0] <= wr_addr[1:0];
                 case (fault)
                     2'b00: begin // stuck at fault
-	memory[1][1] <= 0;
-	memory[3][2] <= 1;
+                        memory[1][1] <= 0;
+                        memory[3][2] <= 1;
                         if (~((wr_addr[1:0] == 1 && wr_addr[3:2] == 1) ||
                               (wr_addr[1:0] == 3 && wr_addr[3:2] == 2))) begin
                             memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
@@ -86,8 +86,8 @@ end
                         end else begin
                             memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
                             $display("No transition faults detected");
-		end
-	end
+                        end
+                    end
 
                     2'b10: begin
                         if (wr_addr[1:0] == 3 && wr_addr[3:2] == 1) begin
@@ -96,16 +96,16 @@ end
                             memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
                         end else begin
                             memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
-end
-end
+                        end
+                    end
 
                     2'b11: begin
                         memory[wr_addr[1:0]][wr_addr[3:2]] <= data_in;
                     end
                 endcase
-			end
-		end
-end
+            end
+        end
+    end
 
 endmodule
 
@@ -178,7 +178,18 @@ always @(posedge clk)
 begin
 if(rst || !Test)
 begin
+	count = 0;
+	element_done = 0;
+	element_operation = 0;
+	fresh_state = 1;
+	state = 3'd0;
+	nextstate = 3'd0;
 	status = 0;
+	RA = 0;
+	CA = 0;
+	we = 0;
+	re = 0;
+	datain = 0;
 end
 else
 begin
@@ -216,7 +227,10 @@ begin
 		if(count == maxsize**2) 
 		begin
 			$display("W0 (updown) done");
-			nextstate = 3'd1;
+			count = 0;
+			element_operation = 0;
+			fresh_state = 1;
+			state = 3'd1;
 		end
 		
 		end
@@ -291,7 +305,10 @@ begin
 		if(count == maxsize**2) 
 		begin
 			$display("R0,W1,W0,W1 (up) done");
-			nextstate = 3'd2;
+			count = 0;
+			element_operation = 0;
+			fresh_state = 1;
+			state = 3'd2;
 		end
 
 		end
@@ -358,7 +375,10 @@ begin
 		if(count == maxsize**2) 
 		begin
 			$display("R1,W0,W1 (up) done");
-			nextstate = 3'd3;
+			count = 0;
+			element_operation = 0;
+			fresh_state = 1;
+			state = 3'd3;
 		end
 
 		end
@@ -432,7 +452,10 @@ begin
 		if(count == maxsize**2) 
 		begin
 			$display("R1,W0,W1,W0 (down) done");
-			nextstate = 3'd4;
+			count = 0;
+			element_operation = 0;
+			fresh_state = 1;
+			state = 3'd4;
 		end
 
 		end
@@ -500,19 +523,6 @@ begin
     endcase
 
 end
-end
-
-//Define variables for every state
-always @(state)
-begin 
-    count <= 0;
-	element_operation <= 0;
-	fresh_state <= 1; 
-end
-
-always@(nextstate)
-begin
-	state=nextstate;
 end
 
 //Print the test result
