@@ -128,7 +128,7 @@ module MBIST_Controller#(
 localparam integer maxsize = 2**RAWIDTH;
 localparam integer CELL_COUNT = maxsize * maxsize;
 
-reg [31:0]count;
+reg [4:0]count;
 reg element_done;
 reg [1:0]element_operation;
 reg fresh_state;
